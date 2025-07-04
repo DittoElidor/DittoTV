@@ -1,0 +1,7 @@
+<resources>
+    <!-- Base application theme. -->
+    <style name="Theme.DittoTV" parent="Theme.Leanback">
+        <!-- This sets the default background for the entire app, preventing the white flash -->
+        <item name="android:windowBackground">#141414</item>
+    </style>
+</resources>
