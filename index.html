@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DittoTV</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body { background-color: #141414; color: #e5e5e5; font-family: 'Assistant', sans-serif; overflow: hidden; background-image: radial-gradient(ellipse at top, #282828 0%, #141414 70%); }
+        .app-container { padding: 2rem 3.5rem; height: 100vh; overflow-y: auto; scroll-behavior: smooth; scrollbar-width: none; -ms-overflow-style: none; }
+        .app-container::-webkit-scrollbar { display: none; }
+        .category-row-container { margin-bottom: 3.5rem; }
+        .category-title { font-size: 1.6rem; font-weight: 700; margin-bottom: 1.25rem; }
+        .media-scroller { display: flex; overflow-x: auto; padding-bottom: 1rem; scrollbar-width: none; -ms-overflow-style: none; scroll-behavior: smooth;}
+        .media-scroller::-webkit-scrollbar { display: none; }
+        .media-item { position: relative; flex: 0 0 auto; width: 160px; margin-left: 20px; border: 4px solid transparent; border-radius: 8px; transition: all 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94); cursor: pointer; background-color: #1f1f1f; box-shadow: 0 10px 20px rgba(0,0,0,0.2); }
+        .media-item.focused { border-color: #E50914; transform: scale(1.1); z-index: 10; box-shadow: 0 0 35px 8px rgba(229, 9, 20, 0.3); }
+        .media-item img { width: 100%; height: 240px; object-fit: cover; border-radius: 4px; }
+        .placeholder { display: flex; align-items: center; justify-content: center; text-align: center; height: 240px; padding: 1rem; font-weight: 600; }
+        #detail-view { position: relative; }
+        .detail-background { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background-size: cover; background-position: center center; filter: blur(20px) brightness(0.4); transform: scale(1.1); transition: opacity 0.4s ease-in-out; opacity: 0; z-index: -1; }
+        .detail-content { z-index: 1; }
+        .season-selector { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 2rem; }
+        .season-button { padding: 0.5rem 1.5rem; background-color: rgba(40, 40, 40, 0.8); border: 2px solid transparent; border-radius: 20px; cursor: pointer; transition: all 0.2s; }
+        .season-button.focused { border-color: #E50914; background-color: rgba(60, 60, 60, 0.9); }
+        .season-button.selected { background-color: #e5e5e5; color: #141414; font-weight: bold; }
+        .episode-list { max-height: 55vh; overflow-y: auto; padding-left: 10px; }
+        .episode-item { display: block; width: 100%; padding: 1.25rem; margin-bottom: 10px; background-color: rgba(20, 20, 20, 0.7); border-radius: 8px; border: 4px solid transparent; transition: background-color 0.2s, border-color 0.2s; }
+        .episode-item.focused { border-color: #E50914; background-color: rgba(40, 40, 40, 0.9); }
+        .episode-title { font-weight: bold; font-size: 1.1rem; }
+        .episode-description { font-size: 0.9rem; color: #b3b3b3; margin-top: 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .show-description { color: #d1d5db; margin-bottom: 1.5rem; font-size: 1.1rem; max-width: 80ch; }
+        .progress-bar { position: absolute; bottom: 0; left: 0; right: 0; height: 5px; background-color: rgba(255,255,255,0.3); border-radius: 0 0 4px 4px; overflow: hidden; }
+        .progress-bar-inner { height: 100%; background-color: #E50914; }
+    </style>
+</head>
+<body>
+    <div id="main-view" class="app-container">
+        <h1 class="text-4xl font-bold mb-8" style="color: #E50914;">DittoTV</h1>
+        <div id="media-grid"></div>
+    </div>
+    <div id="detail-view" class="app-container hidden">
+        <div class="detail-background" id="detail-bg"></div>
+        <div class="detail-content" id="detail-content-container"></div>
+    </div>
+    <script>
+        const SERVER_BASE_URL = 'http://10.100.102.10:8000';
+        const mainView = document.getElementById('main-view');
+        const detailView = document.getElementById('detail-view');
+        const mediaGrid = document.getElementById('media-grid');
+        const detailBg = document.getElementById('detail-bg');
+        const detailContentContainer = document.getElementById('detail-content-container');
+
+        let mediaData = null;
+        let focusableElements = [];
+        let currentView = 'main';
+        let nav = { row: 0, col: 0 };
+
+        function saveProgress(relativePath, position, duration) {
+            let progressData = getProgress();
+            if (position > 0 && duration > 0 && (position / duration) < 0.95) {
+                progressData[relativePath] = { position, duration, lastWatched: Date.now() };
+            } else {
+                delete progressData[relativePath];
+            }
+            localStorage.setItem('dittoTVProgress', JSON.stringify(progressData));
+        }
+
+        function getProgress() {
+            try {
+                return JSON.parse(localStorage.getItem('dittoTVProgress')) || {};
+            } catch (e) { return {}; }
+        }
+
+        function goBack() { showMainView(); }
+
+        function updateFocus() {
+            document.querySelectorAll('.focused').forEach(item => item.classList.remove('focused'));
+            const row = focusableElements[nav.row];
+            if (!row || row.length === 0) return;
+            const item = row[nav.col];
+            if (!item) return;
+            item.classList.add('focused');
+            if (currentView === 'main') {
+                const parentRowContainer = item.closest('.category-row-container');
+                if (parentRowContainer) {
+                    const container = mainView;
+                    const offset = parentRowContainer.offsetTop - (container.clientHeight / 2) + (parentRowContainer.clientHeight / 2);
+                    container.scrollTo({ top: offset, behavior: 'smooth' });
+                }
+                const scroller = item.closest('.media-scroller');
+                if (scroller) {
+                    const itemOffset = item.offsetLeft - (scroller.clientWidth / 2) + (item.clientWidth / 2);
+                    scroller.scrollTo({ left: itemOffset, behavior: 'smooth' });
+                }
+            } else {
+                item.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+            }
+        }
+
+        detailView.addEventListener('scroll', () => {
+            detailBg.style.transform = `scale(1.1) translateY(${detailView.scrollTop / 3}px)`;
+        });
+
+        function handleKeyDown(e) {
+            e.preventDefault();
+            const row = focusableElements[nav.row];
+            switch (e.key) {
+                case 'ArrowUp': if (nav.row > 0) { nav.row--; nav.col = Math.min(nav.col, focusableElements[nav.row]?.length - 1 || 0); updateFocus(); } break;
+                case 'ArrowDown': if (nav.row < focusableElements.length - 1) { nav.row++; nav.col = 0; updateFocus(); } break;
+                case 'ArrowRight': if ((currentView === 'main' || (currentView === 'detail' && nav.row === 0)) && nav.col > 0) { nav.col--; updateFocus(); } break;
+                case 'ArrowLeft': if (row && nav.col < row.length - 1) { nav.col++; updateFocus(); } break;
+                case 'Enter': document.querySelector('.focused')?.click(); break;
+            }
+        }
+
+        async function loadMedia() {
+            try {
+                const response = await fetch(`${SERVER_BASE_URL}/web/media_index.json?t=${new Date().getTime()}`);
+                if (!response.ok) throw new Error(`HTTP error!`);
+                mediaData = await response.json();
+                renderMainView();
+            } catch (error) {
+                mediaGrid.innerHTML = `<div class="text-red-500 text-2xl">שגיאה בטעינת המדיה.</div>`;
+            }
+        }
+
+        function createPosterCategoryRow(title, items, isTVShow = false, isContinueWatching = false) {
+            const rowContainer = document.createElement('div');
+            rowContainer.className = 'category-row-container';
+            rowContainer.innerHTML = `<h2 class="category-title">${title}</h2>`;
+            const scroller = document.createElement('div');
+            scroller.className = 'media-scroller';
+            const rowItems = [];
+            items.forEach(item => {
+                const mediaItem = document.createElement('div');
+                mediaItem.className = 'media-item';
+                let content = '';
+                if (item.poster_path) {
+                    content = `<img src="${SERVER_BASE_URL}/${item.poster_path}" alt="${item.title}" onerror="this.parentElement.innerHTML = '<div class=\\'placeholder\\'>${item.title}</div>'">`;
+                } else {
+                    content = `<div class="placeholder">${item.title}</div>`;
+                }
+                if (isContinueWatching && item.progress) {
+                    const percentage = (item.progress.position / item.progress.duration) * 100;
+                    content += `<div class="progress-bar"><div class="progress-bar-inner" style="width: ${percentage}%"></div></div>`;
+                }
+                mediaItem.innerHTML = content;
+                if (isContinueWatching) {
+                    mediaItem.onclick = () => DittoTVInterface.playVideoFrom(item.path, item.progress.position);
+                } else {
+                    mediaItem.onclick = isTVShow ? () => showDetailView(item.title) : () => showDetailView(item.title, true);
+                }
+                scroller.appendChild(mediaItem);
+                rowItems.push(mediaItem);
+            });
+            rowContainer.appendChild(scroller);
+            mediaGrid.appendChild(rowContainer);
+            return rowItems;
+        }
+
+        function renderMainView() {
+            currentView = 'main';
+            mediaGrid.innerHTML = '';
+            focusableElements = [];
+            const progressData = getProgress();
+            const continueWatchingItems = Object.keys(progressData)
+                .map(relativePath => {
+                    let mediaItem = null;
+                    let displayItem = null;
+                    if (relativePath.includes('/Movies/')) {
+                        mediaItem = mediaData.movies.find(m => m.path === relativePath);
+                        displayItem = mediaItem;
+                    } else {
+                        const showTitle = decodeURIComponent(relativePath.split('/')[2]);
+                        const seasonName = decodeURIComponent(relativePath.split('/')[3]);
+                        const episodeTitle = decodeURIComponent(relativePath.split('/')[4].replace(/\.(mp4|mkv|avi)$/, ''));
+                        const show = mediaData.tv_shows[showTitle];
+                        if (show?.seasons?.[seasonName]) {
+                            mediaItem = show.seasons[seasonName].find(e => e.title === episodeTitle);
+                            if (mediaItem) {
+                                displayItem = { title: showTitle, poster_path: show.poster_path };
+                            }
+                        }
+                    }
+                    if (!mediaItem || !displayItem) return null;
+                    return { ...displayItem, path: mediaItem.path, progress: progressData[relativePath], lastWatched: progressData[relativePath].lastWatched };
+                })
+                .filter(Boolean)
+                .sort((a, b) => b.lastWatched - a.lastWatched);
+
+            if (continueWatchingItems.length > 0) {
+                focusableElements.push(createPosterCategoryRow('המשך צפייה', continueWatchingItems, false, true));
+            }
+            if (mediaData.movies.length > 0) {
+                focusableElements.push(createPosterCategoryRow('סרטים', mediaData.movies, false));
+            }
+            if (Object.keys(mediaData.tv_shows).length > 0) {
+                const shows = Object.keys(mediaData.tv_shows).map(showTitle => ({ title: showTitle, ...mediaData.tv_shows[showTitle] }));
+                focusableElements.push(createPosterCategoryRow('סדרות', shows, true));
+            }
+            resetFocus();
+            updateFocus();
+        }
+
+        function showMainView() {
+            detailView.classList.add('hidden');
+            mainView.classList.remove('hidden');
+            detailBg.style.opacity = 0;
+            if (typeof DittoTVInterface !== 'undefined') DittoTVInterface.onViewChanged('main');
+            renderMainView();
+        }
+
+        function showDetailView(title, isMovie = false) {
+            currentView = 'detail';
+            mainView.classList.add('hidden');
+            detailView.classList.remove('hidden');
+            if (typeof DittoTVInterface !== 'undefined') DittoTVInterface.onViewChanged('detail');
+            detailContentContainer.innerHTML = '';
+            focusableElements = [];
+            const data = isMovie ? mediaData.movies.find(m => m.title === title) : mediaData.tv_shows[title];
+            if (!data) { showMainView(); return; }
+            if (data.poster_path) {
+                detailBg.style.backgroundImage = `url(${SERVER_BASE_URL}/${data.poster_path})`;
+                detailBg.style.opacity = 1;
+            } else {
+                 detailBg.style.opacity = 0;
+            }
+            const titleEl = document.createElement('h1');
+            titleEl.className = 'text-5xl font-bold mb-4';
+            titleEl.textContent = title;
+            detailContentContainer.appendChild(titleEl);
+            if (data.description) {
+                const descEl = document.createElement('p');
+                descEl.className = 'show-description';
+                descEl.textContent = data.description;
+                detailContentContainer.appendChild(descEl);
+            }
+            if (isMovie) {
+                const playButton = document.createElement('button');
+                playButton.className = 'season-button selected';
+                playButton.textContent = 'נגן';
+                playButton.onclick = () => DittoTVInterface.playVideo(`${SERVER_BASE_URL}/${data.path}`);
+                detailContentContainer.appendChild(playButton);
+                focusableElements.push([playButton]);
+            } else {
+                const seasonSelectorContainer = document.createElement('div');
+                seasonSelectorContainer.className = 'season-selector media-scroller';
+                const episodeListContainer = document.createElement('div');
+                episodeListContainer.className = 'episode-list';
+                detailContentContainer.append(seasonSelectorContainer, episodeListContainer);
+                const seasonNames = Object.keys(data.seasons).sort(natural_sort_key);
+                let seasonButtons = [];
+                const updateEpisodes = (seasonName) => {
+                    episodeListContainer.innerHTML = '';
+                    let episodeItems = [];
+                    data.seasons[seasonName].forEach(episode => {
+                        const episodeItem = document.createElement('a');
+                        episodeItem.href = '#';
+                        episodeItem.className = 'episode-item';
+                        let content = `<div class="episode-title">${episode.title}</div>`;
+                        if (episode.description) content += `<div class="episode-description">${episode.description}</div>`;
+                        episodeItem.innerHTML = content;
+                        episodeItem.onclick = (e) => { e.preventDefault(); DittoTVInterface.playVideo(`${SERVER_BASE_URL}/${episode.path}`); };
+                        episodeListContainer.appendChild(episodeItem);
+                        episodeItems.push(episodeItem);
+                    });
+                    focusableElements = [seasonButtons, ...episodeItems.map(item => [item])];
+                    seasonButtons.forEach(btn => btn.classList.toggle('selected', btn.dataset.season === seasonName));
+                };
+                seasonNames.forEach(seasonName => {
+                    const seasonBtn = document.createElement('button');
+                    seasonBtn.className = 'season-button';
+                    seasonBtn.textContent = seasonName;
+                    seasonBtn.dataset.season = seasonName;
+                    seasonBtn.onclick = () => {
+                        updateEpisodes(seasonName);
+                        nav.row = 1; nav.col = 0;
+                        updateFocus();
+                    };
+                    seasonSelectorContainer.appendChild(seasonBtn);
+                    seasonButtons.push(seasonBtn);
+                });
+                if (seasonNames.length > 0) updateEpisodes(seasonNames[0]);
+            }
+            resetFocus();
+            updateFocus('auto');
+        }
+        function resetFocus() { nav = { row: 0, col: 0 }; }
+        const natural_sort_key = (s) => s && s.toString().split(/(\d+)/).map(t => isNaN(t) ? t.toLowerCase() : Number(t));
+        document.addEventListener('DOMContentLoaded', loadMedia);
+        document.addEventListener('keydown', handleKeyDown);
+    </script>
+</body>
+</html>
